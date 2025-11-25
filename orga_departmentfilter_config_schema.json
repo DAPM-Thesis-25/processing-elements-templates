@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://www.dapm.org/config/orga_departmentfilter_config_schema.json",
+  "title": "orgA DepartmentFilter Config",
+  "type": "object",
+  "properties": {
+    "department": { 
+      "type": "string", 
+      "minLength": 2, 
+      "maxLength": 50,
+      "description": "Department to filter on, e.g., Radiology, Cardiology, Neurology, Oncology, Pediatrics"
+    }
+  },
+  "required": ["department"],
+  "additionalProperties": false
+}

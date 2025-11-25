@@ -1,0 +1,146 @@
+package templates;
+
+import communication.message.Message;
+import communication.message.impl.event.Event;
+import communication.message.impl.petrinet.PetriNet;
+import communication.message.serialization.MessageSerializer;
+import communication.message.serialization.deserialization.MessageFactory;
+import pipeline.processingelement.Configuration;
+import pipeline.processingelement.operator.MiningOperator;
+import utils.Pair;
+import org.springframework.core.io.ClassPathResource;
+
+import java.io.*;
+import java.nio.file.Files;
+import java.util.HashMap;
+import java.util.Map;
+
+public class HeuristicsMiner extends MiningOperator<PetriNet> {
+
+    private final Object processLock = new Object();
+    private Process process;
+    private BufferedWriter jarInput;
+    private BufferedReader jarOutput;
+
+    public HeuristicsMiner(Configuration configuration) {
+        super(configuration);
+    }
+
+    @Override
+    protected Map<Class<? extends Message>, Integer> setConsumedInputs() {
+        Map<Class<? extends Message>, Integer> map = new HashMap<>();
+        map.put(Event.class, 1);
+        return map;
+    }
+
+    private void startProcess() {
+        synchronized (processLock) {
+            try {
+                if (process == null || !process.isAlive()) {
+                    System.out.println("[HeuristicsMiner] Starting heuristics-miner.jar ...");
+
+                    try (InputStream is = new ClassPathResource("algorithms/heuristics-miner.jar").getInputStream()) {
+                        java.nio.file.Path tmp = Files.createTempFile("heuristics-miner-", ".jar");
+                        try (OutputStream os = Files.newOutputStream(tmp)) {
+                            is.transferTo(os);
+                        }
+                        tmp.toFile().deleteOnExit();
+
+                        ProcessBuilder pb = new ProcessBuilder("java", "-jar", tmp.toAbsolutePath().toString());
+                        pb.redirectErrorStream(true);
+                        process = pb.start();
+
+                        jarInput = new BufferedWriter(new OutputStreamWriter(process.getOutputStream()));
+                        jarOutput = new BufferedReader(new InputStreamReader(process.getInputStream()));
+                    }
+                    System.out.println("[HeuristicsMiner] Process started successfully.");
+                }
+            } catch (IOException e) {
+                throw new RuntimeException("Failed to start heuristics-miner.jar", e);
+            }
+        }
+    }
+
+    @Override
+    protected Pair<PetriNet, Boolean> process(Message message, int portNumber) {
+        synchronized (processLock) {
+            try {
+                startProcess();
+
+                // Serialize event
+                MessageSerializer serializer = new MessageSerializer();
+                message.acceptVisitor(serializer);
+                String serializedEvent = serializer.getSerialization();
+                System.out.println("[HeuristicsMiner] Sending event to miner: " + serializedEvent);
+
+                // Send to JAR
+                jarInput.write(serializedEvent);
+                jarInput.newLine();
+                jarInput.flush();
+
+                // Read miner output
+                long startTime = System.currentTimeMillis();
+                StringBuilder outputBuilder = new StringBuilder();
+                String line;
+                while ((line = jarOutput.readLine()) != null) {
+                    if (line.trim().isEmpty()) break;
+                    outputBuilder.append(line).append(System.lineSeparator());
+                    if (System.currentTimeMillis() - startTime > 10000) {
+                        System.err.println("[HeuristicsMiner] ⚠ Timeout waiting for miner output!");
+                        break;
+                    }
+                }
+
+                String statusLine = jarOutput.readLine();
+                String content = outputBuilder.toString().trim();
+                boolean isSuccess = statusLine != null && Boolean.parseBoolean(statusLine);
+
+                System.out.println("[HeuristicsMiner] Received from miner: " + content);
+                System.out.println("[HeuristicsMiner] Success? " + isSuccess);
+
+                if (isSuccess && !content.isEmpty()) {
+                    try {
+                        PetriNet petriNet = (PetriNet) MessageFactory.deserialize(content);
+                        System.out.println("[HeuristicsMiner] ✅ Petri net deserialized successfully!");
+                        return new Pair<>(petriNet, true);
+                    } catch (Exception e) {
+                        System.err.println("[HeuristicsMiner] ❌ Failed to deserialize Petri net: " + e.getMessage());
+                    }
+                } else {
+                    System.err.println("[HeuristicsMiner] ⚠ Miner returned no valid Petri net output.");
+                }
+
+                return new Pair<>(null, false);
+            } catch (Exception e) {
+                System.err.println("[HeuristicsMiner] ❌ Error while processing event: " + e.getMessage());
+                e.printStackTrace();
+                return new Pair<>(null, false);
+            }
+        }
+    }
+
+    @Override
+    protected boolean publishCondition(Pair<PetriNet, Boolean> pair) {
+        return pair.second();
+    }
+
+    @Override
+    public boolean terminate() {
+        super.terminate();
+        synchronized (processLock) {
+            try {
+                if (jarInput != null) jarInput.close();
+                if (jarOutput != null) jarOutput.close();
+                if (process != null) process.destroy();
+            } catch (IOException e) {
+                System.err.println("[HeuristicsMiner] Error closing process: " + e.getMessage());
+            } finally {
+                jarInput = null;
+                jarOutput = null;
+                process = null;
+            }
+        }
+        System.out.println("[HeuristicsMiner] Process terminated.");
+        return true;
+    }
+}
