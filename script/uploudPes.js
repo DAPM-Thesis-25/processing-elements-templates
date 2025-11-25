@@ -5,10 +5,10 @@ const chalk = require("chalk");
 const FormData = require("form-data");
 const fs = require("fs");
 
-// const api_url = "http://localhost:8081/";
-// const api_url_b = "http://localhost:8082/";
-const api_url = "http://130.225.70.66:8081/";
-const api_url_b = "http://130.225.70.65:8082/";
+ const api_url = "http://localhost:8081/";
+ const api_url_b = "http://localhost:8082/";
+//const api_url = "http://130.225.70.66:8081/";
+//const api_url_b = "http://130.225.70.65:8082/";
 // const api_url = "http://dapm3.compute.dtu.dk:8081/api/";
 let token = "";
 let token_b="";
